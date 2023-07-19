@@ -10,10 +10,6 @@
 
 #include "base/integration.h"
 
-#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
-#include "base/platform/linux/base_linux_xsettings.h"
-#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
-
 namespace Ui {
 namespace Platform {
 namespace {
@@ -23,103 +19,62 @@ public:
 	TitleControlsLayoutImpl();
 
 private:
+	using ButtonPlacement = std::tuple<
+		std::vector<Glib::ustring>,
+		std::vector<Glib::ustring>
+	>;
+
+	[[nodiscard]] static TitleControls::Layout Convert(
+		const ButtonPlacement &placement);
+
 	[[nodiscard]] static TitleControls::Layout Get();
 
-	const rpl::lifetime _lifetime;
 	const base::Platform::XDP::SettingWatcher _settingWatcher;
 };
 
 TitleControlsLayoutImpl::TitleControlsLayoutImpl()
 : TitleControlsLayout(Get())
-, _lifetime([&] {
-#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
-	using base::Platform::XCB::XSettings;
-	if (const auto xSettings = XSettings::Instance()) {
-		return xSettings->registerCallbackForProperty(
-			"Gtk/DecorationLayout",
-			[=](xcb_connection_t *, const QByteArray &, const QVariant &) {
-				_variable = Get();
-			});
-	}
-#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
-	return rpl::lifetime();
-}())
-, _settingWatcher("org.gnome.desktop.wm.preferences", "button-layout", [=] {
-	base::Integration::Instance().enterFromEventLoop([&] {
-		_variable = Get();
-	});
-}) {}
+, _settingWatcher(
+	"org.freedesktop.appearance",
+	"button-placement",
+	[=](const ButtonPlacement &value) {
+		base::Integration::Instance().enterFromEventLoop([&] {
+			_variable = Convert(value);
+		});
+	}) {}
 
-TitleControls::Layout TitleControlsLayoutImpl::Get() {
-	const auto convert = [](const QString &keywords) {
-		const auto toControl = [](const QString &keyword) {
-			if (keyword == qstr("minimize")) {
-				return TitleControls::Control::Minimize;
-			} else if (keyword == qstr("maximize")) {
-				return TitleControls::Control::Maximize;
-			} else if (keyword == qstr("close")) {
-				return TitleControls::Control::Close;
-			}
-			return TitleControls::Control::Unknown;
-		};
-
-		TitleControls::Layout result;
-		const auto splitted = keywords.split(':');
-
-		ranges::transform(
-			splitted[0].split(','),
-			ranges::back_inserter(result.left),
-			toControl);
-
-		if (splitted.size() > 1) {
-			ranges::transform(
-				splitted[1].split(','),
-				ranges::back_inserter(result.right),
-				toControl);
+TitleControls::Layout TitleControlsLayoutImpl::Convert(
+		const ButtonPlacement &placement) {
+	const auto toControl = [](const Glib::ustring &keyword) {
+		if (keyword == "minimize") {
+			return TitleControls::Control::Minimize;
+		} else if (keyword == "maximize") {
+			return TitleControls::Control::Maximize;
+		} else if (keyword == "close") {
+			return TitleControls::Control::Close;
 		}
-
-		return result;
+		return TitleControls::Control::Unknown;
 	};
 
-#ifndef DESKTOP_APP_DISABLE_X11_INTEGRATION
-	const auto xSettingsResult = [&]()
-	-> std::optional<TitleControls::Layout> {
-		using base::Platform::XCB::XSettings;
-		const auto xSettings = XSettings::Instance();
-		if (!xSettings) {
-			return std::nullopt;
-		}
+	return TitleControls::Layout{
+		.left = std::get<0>(
+			placement
+		) | ranges::view::transform(
+			toControl
+		) | ranges::to_vector,
+		.right = std::get<1>(
+			placement
+		) | ranges::view::transform(
+			toControl
+		) | ranges::to_vector,
+	};
+}
 
-		const auto decorationLayout = xSettings->setting(
-			"Gtk/DecorationLayout");
-
-		if (!decorationLayout.isValid()) {
-			return std::nullopt;
-		}
-
-		return convert(decorationLayout.toString());
-	}();
-
-	if (xSettingsResult.has_value()) {
-		return *xSettingsResult;
-	}
-#endif // !DESKTOP_APP_DISABLE_X11_INTEGRATION
-
-	const auto portalResult = [&]() -> std::optional<TitleControls::Layout> {
-		auto decorationLayout = base::Platform::XDP::ReadSetting(
-			"org.gnome.desktop.wm.preferences",
-			"button-layout");
-
-		if (!decorationLayout.has_value()) {
-			return std::nullopt;
-		}
-
-		return convert(
-			QString::fromStdString(decorationLayout->get_string(nullptr)));
-	}();
-
-	if (portalResult.has_value()) {
-		return *portalResult;
+TitleControls::Layout TitleControlsLayoutImpl::Get() {
+	if (const auto result = base::Platform::XDP::ReadSetting<ButtonPlacement>(
+			"org.freedesktop.appearance",
+			"button-placement")) {
+		return Convert(result);
 	}
 
 	return TitleControls::Layout{
