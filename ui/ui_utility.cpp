@@ -270,4 +270,21 @@ void SetGeometryWithPossibleScreenChange(
 	Platform::SetGeometryWithPossibleScreenChange(widget, geometry);
 }
 
+
+void UpdateWidget(
+		not_null<QWidget*> widget,
+		std::variant<std::monostate, QRect, QRegion> area) {
+#ifdef Q_OS_WIN
+	Platform::UpdateWidget(widget, area);
+#else // Q_OS_WIN
+	v::match(area, [=](const std::monostate &) {
+		widget->update();
+	}, [=](const QRect &rect) {
+		widget->update(rect);
+	}, [=](const QRegion &region) {
+		widget->update(region);
+	});
+#endif // !Q_OS_WIN
+}
+
 } // namespace Ui

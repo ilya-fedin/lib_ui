@@ -131,4 +131,8 @@ void SetGeomtryWithPossibleScreenChange(
 	not_null<QWidget*> widget,
 	QRect geometry);
 
+void UpdateWidget(
+	not_null<QWidget*> widget,
+	std::variant<std::monostate, QRect, QRegion> area = {});
+
 } // namespace Ui

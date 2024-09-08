@@ -197,4 +197,71 @@ void SetGeometryWithPossibleScreenChange(
 	widget->setGeometry(geometry);
 }
 
+void UpdateWidget(
+		not_null<QWidget*> widget,
+		std::variant<std::monostate, QRect, QRegion> area) {
+	if (!widget->isVisible() || !widget->updatesEnabled()) {
+		return;
+	}
+	const auto toplevel = widget->window();
+	const auto window = toplevel->windowHandle();
+	if (!window) {
+		return;
+	}
+	const auto dpr = window->devicePixelRatio();
+	const auto handle = reinterpret_cast<HWND>(window->winId());
+	if (!handle) {
+		return;
+	}
+	v::match(area, [=](const std::monostate &) {
+		if (widget == toplevel) {
+			if (widget->rect().isEmpty()) {
+				return;
+			}
+			::InvalidateRect(handle, nullptr, FALSE);
+			return;
+		}
+		const auto rect = QRect(
+			widget->mapTo(toplevel, QPoint()) * dpr,
+			widget->size() * dpr);
+		if (rect.isEmpty()) {
+			return;
+		}
+		const auto r = RECT{
+			rect.left(),
+			rect.top(),
+			rect.left() + rect.width(),
+			rect.top() + rect.height()
+		};
+		::InvalidateRect(handle, &r, FALSE);
+	}, [=](const QRect &rect) {
+		if (rect.isEmpty()) {
+			return;
+		}
+		const auto mappedRect = QRect(
+			widget->mapTo(toplevel, rect.topLeft()) * dpr,
+			rect.size() * dpr);
+		const auto r = RECT{
+			mappedRect.left(),
+			mappedRect.top(),
+			mappedRect.left() + mappedRect.width(),
+			mappedRect.top() + mappedRect.height()
+		};
+		::InvalidateRect(handle, &r, FALSE);
+	}, [=](const QRegion &region) {
+		for (const auto &rect : region) {
+			const auto mappedRect = QRect(
+				widget->mapTo(toplevel, rect.topLeft()) * dpr,
+				rect.size() * dpr);
+			const auto r = RECT{
+				mappedRect.left(),
+				mappedRect.top(),
+				mappedRect.left() + mappedRect.width(),
+				mappedRect.top() + mappedRect.height()
+			};
+			::InvalidateRect(handle, &r, FALSE);
+		}
+	});
+}
+
 } // namespace Ui::Platform
