@@ -8,8 +8,6 @@
 
 #include "base/algorithm.h"
 #include "base/debug_log.h"
-#include "base/variant.h"
-#include "base/base_file_utilities.h"
 #include "ui/integration.h"
 
 #include <QtCore/QMap>
@@ -68,12 +66,12 @@ namespace {
 
 #ifndef LIB_UI_USE_PACKAGED_FONTS
 const auto FontTypes = std::array{
+	u"NotoSans"_q,
+	u"NotoSans-Italic"_q,
 	u"OpenSans-Regular"_q,
 	u"OpenSans-Italic"_q,
 	u"OpenSans-SemiBold"_q,
 	u"OpenSans-SemiBoldItalic"_q,
-};
-const auto PersianFontTypes = std::array{
 	u"Vazirmatn-UI-NL-Regular"_q,
 	u"Vazirmatn-UI-NL-SemiBold"_q,
 };
@@ -186,13 +184,12 @@ struct Metrics {
 	};
 
 	const auto family = font.family();
-	const auto basic = u"Open Sans"_q;
-	if (family == basic || !adjust) {
+	if (family == kDefaultFont.utf16() || !adjust) {
 		return simple();
 	}
 
 	auto copy = font;
-	copy.setFamily(basic);
+	copy.setFamily(kDefaultFont.utf16());
 	const auto basicMetrics = QFontMetricsF(copy);
 
 	static const auto Full = u"bdfghijklpqtyBDFGHIJKLPQTY1234567890[]{}()"_q;
@@ -325,10 +322,7 @@ struct Metrics {
 	} else if (overriden) {
 		font.setFamily(family);
 	} else {
-		font.setFamily("Open Sans"_q);
-#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
-		font.setFeature("ss03", true);
-#endif // Qt >= 6.7.0
+		font.setFamily(kDefaultFont.utf16());
 	}
 	font.setPixelSize(size);
 
@@ -339,6 +333,11 @@ struct Metrics {
 	font.setWeight((flags & (FontFlag::Bold | FontFlag::Semibold))
 		? QFont::DemiBold
 		: QFont::Normal);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+	if (!monospace && !system && !overriden) {	
+		font.setVariableAxis("wght", 83.f / 90.f * font.weight());
+	}
+#endif // Qt >= 6.7.0
 	if (font.bold()) {
 		const auto style = QFontInfo(font).styleName();
 		if (!style.isEmpty() && !style.startsWith(
@@ -376,17 +375,11 @@ void StartFonts() {
 	style_InitFontsResource();
 
 #ifndef LIB_UI_USE_PACKAGED_FONTS
-	const auto base = u":/gui/fonts/"_q;
-	const auto name = u"Open Sans"_q;
-
 	for (const auto &file : FontTypes) {
-		LoadCustomFont(base + file + u".ttf"_q);
+		LoadCustomFont(u":/gui/fonts/"_q + file + u".ttf"_q);
 	}
 
-	for (const auto &file : PersianFontTypes) {
-		LoadCustomFont(base + file + u".ttf"_q);
-	}
-	QFont::insertSubstitution(name, u"Vazirmatn UI NL"_q);
+	QFont::insertSubstitution(kDefaultFont.utf16(), u"Vazirmatn UI NL"_q);
 
 #ifdef Q_OS_MAC
 	const auto list = QStringList{
@@ -395,7 +388,7 @@ void StartFonts() {
 		u"Helvetica Neue"_q,
 		u"Lucida Grande"_q,
 	};
-	QFont::insertSubstitutions(name, list);
+	QFont::insertSubstitutions(kDefaultFont.utf16(), list);
 #endif // Q_OS_MAC
 #endif // !LIB_UI_USE_PACKAGED_FONTS
 }

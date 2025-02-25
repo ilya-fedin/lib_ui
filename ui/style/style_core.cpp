@@ -61,7 +61,7 @@ void StopShortAnimation() {
 } // namespace internal
 
 void StartManager(int scale) {
-	internal::RegisterFontFamily("Open Sans");
+	internal::RegisterFontFamily(internal::kDefaultFont.utf16());
 	internal::StartModules(scale);
 }
 

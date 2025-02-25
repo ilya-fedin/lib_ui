@@ -1,5 +1,7 @@
 <RCC>
   <qresource prefix="/gui/fonts">
+    <file>NotoSans.ttf</file>
+    <file>NotoSans-Italic.ttf</file>
     <file>OpenSans-Regular.ttf</file>
     <file>OpenSans-Italic.ttf</file>
     <file>OpenSans-SemiBold.ttf</file>

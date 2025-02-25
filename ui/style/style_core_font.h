@@ -7,6 +7,7 @@
 #pragma once
 
 #include "base/basic_types.h"
+#include "base/const_string.h"
 #include "base/flags.h"
 
 #include <QtGui/QFont>
@@ -43,6 +44,12 @@ struct FontResolveResult {
 [[nodiscard]] const FontResolveResult *FindAdjustResult(const QFont &font);
 
 namespace internal {
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 7, 0)
+inline constexpr auto kDefaultFont = "Noto Sans"_cs;
+#else // Qt >= 6.7.0
+inline constexpr auto kDefaultFont = "Open Sans"_cs;
+#endif // Qt < 6.7.0
 
 void StartFonts();
 
