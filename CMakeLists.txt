@@ -321,11 +321,6 @@ PRIVATE
     emoji_suggestions/emoji_suggestions_helper.h
 )
 
-if (DESKTOP_APP_USE_PACKAGED_FONTS)
-    target_compile_definitions(lib_ui PRIVATE LIB_UI_USE_PACKAGED_FONTS)
-    remove_target_sources(lib_ui ${src_loc} fonts/fonts.qrc)
-endif()
-
 target_include_directories(lib_ui
 PUBLIC
     ${src_loc}
@@ -343,7 +338,8 @@ PRIVATE
 )
 
 if (WIN32 AND QT_VERSION LESS 6)
-    target_link_libraries(lib_ui PRIVATE desktop-app::external_angle)
+    find_package(unofficial-angle REQUIRED)
+    target_link_libraries(lib_ui PRIVATE unofficial::angle::libEGL)
 endif()
 
 target_prepare_qrc(lib_ui)

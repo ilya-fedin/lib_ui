@@ -28,9 +28,7 @@ void style_InitFontsResource() {
 
 #else // Q_OS_MAC
 
-#ifndef LIB_UI_USE_PACKAGED_FONTS
 	Q_INIT_RESOURCE(fonts);
-#endif // !LIB_UI_USE_PACKAGED_FONTS
 #ifdef Q_OS_WIN
 	Q_INIT_RESOURCE(win);
 #endif // Q_OS_WIN
