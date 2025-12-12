@@ -339,9 +339,11 @@ RpWidget::RpWidget(QWidget *parent)
 		format.setGreenBufferSize(8);
 		format.setBlueBufferSize(8);
 #endif // DESKTOP_APP_USE_ANGLE
-#ifdef Q_OS_MAC
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
 		format.setColorSpace(QColorSpace::SRgb);
-#endif // Q_OS_MAC
+#else // Qt >= 6.0.0
+		format.setColorSpace(QSurfaceFormat::sRGBColorSpace);
+#endif // Qt < 6.0.0
 		QSurfaceFormat::setDefaultFormat(format);
 		return true;
 	}();
