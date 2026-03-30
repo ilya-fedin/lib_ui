@@ -22,6 +22,21 @@ extern const style::ScrollArea &defaultScrollArea;
 
 namespace Ui {
 
+// Touch flick ignore 3px.
+inline constexpr auto kFingerAccuracyThreshold = 3;
+
+// 4000px per second.
+inline constexpr auto kMaxScrollAccelerated = 4000;
+
+// 2500px per second.
+inline constexpr auto kMaxScrollFlick = 2500;
+
+enum class TouchScrollState {
+	Manual, // Scrolling manually with the finger on the screen
+	Auto, // Scrolling automatically
+	Acceleration // Scrolling automatically but a finger is on the screen
+};
+
 struct ScrollState {
 	int visibleFrom = 0;
 	int visibleTill = 0;

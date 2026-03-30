@@ -8,13 +8,19 @@
 
 #include "ui/painter.h"
 #include "ui/ui_utility.h"
+#include "base/invoke_queued.h"
 #include "base/qt/qt_common_adapters.h"
 #include "base/debug_log.h"
 
 #include <QtWidgets/QScrollBar>
+#include <QtWidgets/QScroller>
 #include <QtWidgets/QApplication>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QWindow>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif // Q_OS_WIN
 
 namespace Ui {
 namespace {
@@ -54,6 +60,11 @@ namespace {
 		scToFrom = toFrom;
 	}
 	return scToFrom;
+}
+
+[[nodiscard]] bool IsMouseFromTouch(Qt::MouseEventSource source) {
+	return source == Qt::MouseEventSynthesizedBySystem
+		|| source == Qt::MouseEventSynthesizedByQt;
 }
 
 } // namespace
@@ -385,17 +396,22 @@ auto ScrollBar::shadowVisibilityChanged() const
 	return _shadowVisibilityChanged.events();
 }
 
-ScrollArea::ScrollArea(
-	QWidget *parent,
-	const style::ScrollArea &st,
-	bool handleTouch)
+ScrollArea::ScrollArea(QWidget *parent, const style::ScrollArea &st)
 : Parent(parent)
 , _st(st)
 , _horizontalBar(this, false, &_st)
 , _verticalBar(this, true, &_st)
 , _topShadow(this, &_st)
 , _bottomShadow(this, &_st)
-, _touchEnabled(handleTouch) {
+, _scroller(QScroller::scroller(this))
+, _touchTimer([=] {
+	SendSynteticMouseEvent(
+		this,
+		QEvent::MouseButtonPress,
+		Qt::LeftButton,
+		_touchStart);
+	_touchRightButton = true;
+}) {
 	setLayoutDirection(style::LayoutDirection());
 	setFocusPolicy(Qt::NoFocus);
 
@@ -420,18 +436,10 @@ ScrollArea::ScrollArea(
 	_horizontalValue = horizontalScrollBar()->value();
 	_verticalValue = verticalScrollBar()->value();
 
-	if (_touchEnabled) {
-		viewport()->setAttribute(Qt::WA_AcceptTouchEvents);
-		_touchTimer.setCallback([=] { _touchRightButton = true; });
-		_touchScrollTimer.setCallback([=] { touchScrollTimer(); });
-	}
-}
-
-void ScrollArea::touchDeaccelerate(int32 elapsed) {
-	int32 x = _touchSpeed.x();
-	int32 y = _touchSpeed.y();
-	_touchSpeed.setX((x == 0) ? x : (x > 0) ? qMax(0, x - elapsed) : qMin(0, x + elapsed));
-	_touchSpeed.setY((y == 0) ? y : (y > 0) ? qMax(0, y - elapsed) : qMin(0, y + elapsed));
+#ifdef Q_OS_WIN
+	setAttribute(Qt::WA_DontCreateNativeAncestors);
+	SetProp((HWND)winId(), L"MicrosoftTabletPenServiceProperty", (HANDLE)1);
+#endif // Q_OS_WIN
 }
 
 void ScrollArea::scrolled() {
@@ -503,71 +511,6 @@ int ScrollArea::scrollTop() const {
 	return _verticalValue;
 }
 
-void ScrollArea::touchScrollTimer() {
-	auto nowTime = crl::now();
-	if (_touchScrollState == TouchScrollState::Acceleration && _touchWaitingAcceleration && (nowTime - _touchAccelerationTime) > 40) {
-		_touchScrollState = TouchScrollState::Manual;
-		touchResetSpeed();
-	} else if (_touchScrollState == TouchScrollState::Auto || _touchScrollState == TouchScrollState::Acceleration) {
-		int32 elapsed = int32(nowTime - _touchTime);
-		QPoint delta = _touchSpeed * elapsed / 1000;
-		bool hasScrolled = touchScroll(delta);
-
-		if (_touchSpeed.isNull() || !hasScrolled) {
-			_touchScrollState = TouchScrollState::Manual;
-			_touchScroll = false;
-			_touchScrollTimer.cancel();
-		} else {
-			_touchTime = nowTime;
-		}
-		touchDeaccelerate(elapsed);
-	}
-}
-
-void ScrollArea::touchUpdateSpeed() {
-	const auto nowTime = crl::now();
-	if (_touchPrevPosValid) {
-		const int elapsed = nowTime - _touchSpeedTime;
-		if (elapsed) {
-			const QPoint newPixelDiff = (_touchPos - _touchPrevPos);
-			const QPoint pixelsPerSecond = newPixelDiff * (1000 / elapsed);
-
-			// fingers are inacurates, we ignore small changes to avoid stopping the autoscroll because
-			// of a small horizontal offset when scrolling vertically
-			const int newSpeedY = (qAbs(pixelsPerSecond.y()) > kFingerAccuracyThreshold) ? pixelsPerSecond.y() : 0;
-			const int newSpeedX = (qAbs(pixelsPerSecond.x()) > kFingerAccuracyThreshold) ? pixelsPerSecond.x() : 0;
-			if (_touchScrollState == TouchScrollState::Auto) {
-				const int oldSpeedY = _touchSpeed.y();
-				const int oldSpeedX = _touchSpeed.x();
-				if ((oldSpeedY <= 0 && newSpeedY <= 0) || ((oldSpeedY >= 0 && newSpeedY >= 0)
-					&& (oldSpeedX <= 0 && newSpeedX <= 0)) || (oldSpeedX >= 0 && newSpeedX >= 0)) {
-					_touchSpeed.setY(std::clamp((oldSpeedY + (newSpeedY / 4)), -kMaxScrollAccelerated, +kMaxScrollAccelerated));
-					_touchSpeed.setX(std::clamp((oldSpeedX + (newSpeedX / 4)), -kMaxScrollAccelerated, +kMaxScrollAccelerated));
-				} else {
-					_touchSpeed = QPoint();
-				}
-			} else {
-				// we average the speed to avoid strange effects with the last delta
-				if (!_touchSpeed.isNull()) {
-					_touchSpeed.setX(std::clamp((_touchSpeed.x() / 4) + (newSpeedX * 3 / 4), -kMaxScrollFlick, +kMaxScrollFlick));
-					_touchSpeed.setY(std::clamp((_touchSpeed.y() / 4) + (newSpeedY * 3 / 4), -kMaxScrollFlick, +kMaxScrollFlick));
-				} else {
-					_touchSpeed = QPoint(newSpeedX, newSpeedY);
-				}
-			}
-		}
-	} else {
-		_touchPrevPosValid = true;
-	}
-	_touchSpeedTime = nowTime;
-	_touchPrevPos = _touchPos;
-}
-
-void ScrollArea::touchResetSpeed() {
-	_touchSpeed = QPoint();
-	_touchPrevPosValid = false;
-}
-
 bool ScrollArea::eventHook(QEvent *e) {
 	const auto was = (e->type() == QEvent::LayoutRequest)
 		? verticalScrollBar()->minimum()
@@ -581,143 +524,102 @@ bool ScrollArea::eventHook(QEvent *e) {
 }
 
 bool ScrollArea::eventFilter(QObject *obj, QEvent *e) {
-	const auto result = QScrollArea::eventFilter(obj, e);
-	return (obj == widget() && filterOutTouchEvent(e)) || result;
+	auto result = false;
+	switch (e->type()) {
+	case QEvent::MouseButtonPress: {
+		const auto ev = static_cast<QMouseEvent*>(e);
+		if (IsMouseFromTouch(ev->source())
+			&& ev->button() == Qt::LeftButton) {
+			_touchMaybePressing = true;
+			_touchStart = ev->globalPos();
+			_touchTimer.callOnce(QApplication::startDragTime());
+			result = true;
+		}
+	} break;
+	case QEvent::MouseMove: {
+		const auto ev = static_cast<QMouseEvent*>(e);
+		if (IsMouseFromTouch(ev->source())
+			&& (ev->buttons() & Qt::LeftButton)) {
+			if (_touchTimer.isActive()
+				&& (_touchStart - ev->globalPos()).manhattanLength()
+					>= QApplication::startDragDistance()) {
+				_scroller->handleInput(
+					QScroller::InputPress,
+					mapFromGlobal(_touchStart),
+					crl::now());
+				_touchMaybePressing = false;
+				_touchTimer.cancel();
+				result = true;
+			} else if (!_touchMaybePressing.current()) {
+				_scroller->handleInput(
+					QScroller::InputMove,
+					mapFromGlobal(ev->globalPos()),
+					crl::now());
+				result = true;
+			}
+		}
+	} break;
+	case QEvent::MouseButtonRelease: {
+		const auto ev = static_cast<QMouseEvent*>(e);
+		if (IsMouseFromTouch(ev->source())
+			&& ev->button() == Qt::LeftButton) {
+			if (_touchRightButton) {
+				InvokeQueued(this, [=] {
+					SendSynteticMouseEvent(
+						this,
+						QEvent::MouseMove,
+						Qt::NoButton,
+						_touchStart);
+					SendSynteticMouseEvent(
+						this,
+						QEvent::MouseButtonPress,
+						Qt::RightButton,
+						_touchStart);
+					SendSynteticMouseEvent(
+						this,
+						QEvent::MouseButtonRelease,
+						Qt::RightButton,
+						_touchStart);
+					if (auto windowHandle = window()->windowHandle()) {
+						QContextMenuEvent ev(
+							QContextMenuEvent::Mouse,
+							windowHandle->mapFromGlobal(_touchStart),
+							_touchStart,
+							QGuiApplication::keyboardModifiers());
+						ev.setTimestamp(crl::now());
+						QGuiApplication::sendEvent(windowHandle, &ev);
+					}
+				});
+			} else if (!_touchMaybePressing.current()) {
+				_scroller->handleInput(
+					QScroller::InputRelease,
+					mapFromGlobal(ev->globalPos()),
+					crl::now());
+				result = true;
+			} else {
+				SendSynteticMouseEvent(
+					this,
+					QEvent::MouseButtonPress,
+					Qt::LeftButton,
+					_touchStart);
+			}
+			_touchRightButton = false;
+			_touchMaybePressing = false;
+			_touchTimer.cancel();
+		}
+	} break;
+	}
+	return result || QScrollArea::eventFilter(obj, e);
 }
 
 bool ScrollArea::viewportEvent(QEvent *e) {
-	if (filterOutTouchEvent(e)) {
-		return true;
-	} else if (e->type() == QEvent::Wheel) {
+	if (e->type() == QEvent::Wheel) {
 		if (_customWheelProcess
 			&& _customWheelProcess(static_cast<QWheelEvent*>(e))) {
 			return true;
 		}
 	}
 	return QScrollArea::viewportEvent(e);
-}
-
-bool ScrollArea::filterOutTouchEvent(QEvent *e) {
-	const auto type = e->type();
-	if (type == QEvent::TouchBegin
-		|| type == QEvent::TouchUpdate
-		|| type == QEvent::TouchEnd
-		|| type == QEvent::TouchCancel) {
-		const auto ev = static_cast<QTouchEvent*>(e);
-		if (ev->device()->type() == base::TouchDevice::TouchScreen) {
-			if (_customTouchProcess && _customTouchProcess(ev)) {
-				return true;
-			} else if (_touchEnabled) {
-				touchEvent(ev);
-				return true;
-			}
-		}
-	}
-	return false;
-}
-
-void ScrollArea::touchEvent(QTouchEvent *e) {
-	if (!e->touchPoints().isEmpty()) {
-		_touchPrevPos = _touchPos;
-		_touchPos = e->touchPoints().cbegin()->screenPos().toPoint();
-	}
-
-	switch (e->type()) {
-	case QEvent::TouchBegin: {
-		if (_touchPress || e->touchPoints().isEmpty()) return;
-		_touchPress = true;
-		if (_touchScrollState == TouchScrollState::Auto) {
-			_touchScrollState = TouchScrollState::Acceleration;
-			_touchWaitingAcceleration = true;
-			_touchMaybePressing = false;
-			_touchAccelerationTime = crl::now();
-			touchUpdateSpeed();
-			_touchStart = _touchPos;
-		} else {
-			_touchScroll = false;
-			_touchMaybePressing = true;
-			_touchTimer.callOnce(QApplication::startDragTime());
-		}
-		_touchStart = _touchPrevPos = _touchPos;
-		_touchRightButton = false;
-	} break;
-
-	case QEvent::TouchUpdate: {
-		if (!_touchPress) return;
-		if (!_touchScroll && (_touchPos - _touchStart).manhattanLength() >= QApplication::startDragDistance()) {
-			_touchTimer.cancel();
-			_touchScroll = true;
-			_touchMaybePressing = false;
-			touchUpdateSpeed();
-		}
-		if (_touchScroll) {
-			if (_touchScrollState == TouchScrollState::Manual) {
-				touchScrollUpdated(_touchPos);
-			} else if (_touchScrollState == TouchScrollState::Acceleration) {
-				touchUpdateSpeed();
-				_touchAccelerationTime = crl::now();
-				if (_touchSpeed.isNull()) {
-					_touchScrollState = TouchScrollState::Manual;
-				}
-			}
-		}
-	} break;
-
-	case QEvent::TouchEnd: {
-		if (!_touchPress) return;
-		_touchPress = false;
-		auto weak = base::make_weak(this);
-		if (_touchScroll) {
-			if (_touchScrollState == TouchScrollState::Manual) {
-				_touchScrollState = TouchScrollState::Auto;
-				_touchPrevPosValid = false;
-				_touchScrollTimer.callEach(15);
-				_touchTime = crl::now();
-			} else if (_touchScrollState == TouchScrollState::Auto) {
-				_touchScrollState = TouchScrollState::Manual;
-				_touchScroll = false;
-				touchResetSpeed();
-			} else if (_touchScrollState == TouchScrollState::Acceleration) {
-				_touchScrollState = TouchScrollState::Auto;
-				_touchWaitingAcceleration = false;
-				_touchPrevPosValid = false;
-			}
-		} else if (window()) { // one short tap -- like left mouse click, one long tap -- like right mouse click
-			Qt::MouseButton btn(_touchRightButton ? Qt::RightButton : Qt::LeftButton);
-
-			if (weak) SendSynteticMouseEvent(this, QEvent::MouseMove, Qt::NoButton, _touchStart);
-			if (weak) SendSynteticMouseEvent(this, QEvent::MouseButtonPress, btn, _touchStart);
-			if (weak) SendSynteticMouseEvent(this, QEvent::MouseButtonRelease, btn, _touchStart);
-
-			if (weak && _touchRightButton) {
-				auto windowHandle = window()->windowHandle();
-				auto localPoint = windowHandle->mapFromGlobal(_touchStart);
-				QContextMenuEvent ev(QContextMenuEvent::Mouse, localPoint, _touchStart, QGuiApplication::keyboardModifiers());
-				ev.setTimestamp(crl::now());
-				QGuiApplication::sendEvent(windowHandle, &ev);
-			}
-		}
-		if (weak) {
-			_touchTimer.cancel();
-			_touchRightButton = false;
-			_touchMaybePressing = false;
-		}
-	} break;
-
-	case QEvent::TouchCancel: {
-		_touchPress = false;
-		_touchScroll = false;
-		_touchMaybePressing = false;
-		_touchScrollState = TouchScrollState::Manual;
-		_touchTimer.cancel();
-	} break;
-	}
-}
-
-void ScrollArea::touchScrollUpdated(const QPoint &screenPos) {
-	_touchPos = screenPos;
-	touchScroll(_touchPos - _touchPrevPos);
-	touchUpdateSpeed();
 }
 
 void ScrollArea::disableScroll(bool dis) {
@@ -733,30 +635,6 @@ void ScrollArea::scrollContentsBy(int dx, int dy) {
 		return;
 	}
 	QScrollArea::scrollContentsBy(dx, dy);
-}
-
-bool ScrollArea::touchScroll(const QPoint &delta) {
-	const auto top = scrollTop();
-	const auto topMax = scrollTopMax();
-	const auto left = scrollLeft();
-	const auto leftMax = scrollLeftMax();
-	const auto xAbs = qAbs(delta.x());
-	const auto yAbs = qAbs(delta.y());
-	const auto direction = (leftMax <= 0 || yAbs > xAbs)
-		? Qt::Vertical
-		: Qt::Horizontal;
-	const auto was = (direction == Qt::Vertical) ? top : left;
-	const auto now = (direction == Qt::Vertical)
-		? std::clamp(top - delta.y(), 0, topMax)
-		: std::clamp(left - delta.x(), 0, leftMax);
-	if (now == was) {
-		return false;
-	} else if (direction == Qt::Vertical) {
-		scrollToY(now);
-	} else {
-		horizontalScrollBar()->setValue(now);
-	}
-	return true;
 }
 
 void ScrollArea::resizeEvent(QResizeEvent *e) {
@@ -853,19 +731,10 @@ void ScrollArea::scrollToY(int toTop, int toBottom) {
 }
 
 void ScrollArea::doSetOwnedWidget(object_ptr<QWidget> w) {
-	if (widget() && _touchEnabled) {
-		widget()->removeEventFilter(this);
-		if (!_widgetAcceptsTouch) widget()->setAttribute(Qt::WA_AcceptTouchEvents, false);
-	}
 	_widget = std::move(w);
 	QScrollArea::setWidget(_widget);
 	if (_widget) {
 		_widget->setAutoFillBackground(false);
-		if (_touchEnabled) {
-			_widget->installEventFilter(this);
-			_widgetAcceptsTouch = _widget->testAttribute(Qt::WA_AcceptTouchEvents);
-			_widget->setAttribute(Qt::WA_AcceptTouchEvents);
-		}
 	}
 }
 

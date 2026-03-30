@@ -15,22 +15,9 @@
 #include <QtWidgets/QScrollArea>
 #include <QtGui/QtEvents>
 
+class QScroller;
+
 namespace Ui {
-
-// Touch flick ignore 3px.
-inline constexpr auto kFingerAccuracyThreshold = 3;
-
-// 4000px per second.
-inline constexpr auto kMaxScrollAccelerated = 4000;
-
-// 2500px per second.
-inline constexpr auto kMaxScrollFlick = 2500;
-
-enum class TouchScrollState {
-	Manual, // Scrolling manually with the finger on the screen
-	Auto, // Scrolling automatically
-	Acceleration // Scrolling automatically but a finger is on the screen
-};
 
 class ScrollArea;
 
@@ -126,7 +113,7 @@ private:
 class ScrollArea : public RpWidgetBase<QScrollArea> {
 public:
 	using Parent = RpWidgetBase<QScrollArea>;
-	ScrollArea(QWidget *parent, const style::ScrollArea &st = st::defaultScrollArea, bool handleTouch = true);
+	ScrollArea(QWidget *parent, const style::ScrollArea &st = st::defaultScrollArea);
 
 	int scrollWidth() const;
 	int scrollHeight() const;
@@ -178,9 +165,6 @@ public:
 	void setCustomWheelProcess(Fn<bool(not_null<QWheelEvent*>)> process) {
 		_customWheelProcess = std::move(process);
 	}
-	void setCustomTouchProcess(Fn<bool(not_null<QTouchEvent*>)> process) {
-		_customTouchProcess = std::move(process);
-	}
 
 	[[nodiscard]] rpl::producer<> scrolls() const;
 	[[nodiscard]] rpl::producer<> innerResizes() const;
@@ -194,7 +178,6 @@ protected:
 
 	void resizeEvent(QResizeEvent *e) override;
 	void moveEvent(QMoveEvent *e) override;
-	void touchEvent(QTouchEvent *e);
 
 	void enterEventHook(QEnterEvent *e) override;
 	void leaveEventHook(QEvent *e) override;
@@ -206,15 +189,6 @@ private:
 	void doSetOwnedWidget(object_ptr<QWidget> widget);
 	object_ptr<QWidget> doTakeWidget();
 
-	bool filterOutTouchEvent(QEvent *e);
-	void touchScrollTimer();
-	bool touchScroll(const QPoint &delta);
-	void touchScrollUpdated(const QPoint &screenPos);
-
-	void touchResetSpeed();
-	void touchUpdateSpeed();
-	void touchDeaccelerate(int32 elapsed);
-
 	bool _disabled = false;
 	bool _movingByScrollBar = false;
 
@@ -222,27 +196,14 @@ private:
 	object_ptr<ScrollBar> _horizontalBar, _verticalBar;
 	object_ptr<ScrollShadow> _topShadow, _bottomShadow;
 	int _horizontalValue, _verticalValue;
+	const not_null<QScroller*> _scroller;
 
-	bool _touchEnabled = false;
 	base::Timer _touchTimer;
-	bool _touchScroll = false;
-	bool _touchPress = false;
 	bool _touchRightButton = false;
-	QPoint _touchStart, _touchPrevPos, _touchPos;
-
-	TouchScrollState _touchScrollState = TouchScrollState::Manual;
-	bool _touchPrevPosValid = false;
-	bool _touchWaitingAcceleration = false;
+	QPoint _touchStart;
 	rpl::variable<bool> _touchMaybePressing;
-	QPoint _touchSpeed;
-	crl::time _touchSpeedTime = 0;
-	crl::time _touchAccelerationTime = 0;
-	crl::time _touchTime = 0;
-	base::Timer _touchScrollTimer;
 
 	Fn<bool(not_null<QWheelEvent*>)> _customWheelProcess;
-	Fn<bool(not_null<QTouchEvent*>)> _customTouchProcess;
-	bool _widgetAcceptsTouch = false;
 
 	object_ptr<QWidget> _widget = { nullptr };
 
