@@ -185,6 +185,11 @@ PRIVATE
     ui/text/text_block_parser.h
     ui/text/text_custom_emoji.cpp
     ui/text/text_custom_emoji.h
+    ui/text/text_char_attributes.cpp
+    ui/text/text_char_attributes.h
+    ui/text/text_script_analysis.h
+    ui/text/text_shaper.cpp
+    ui/text/text_shaper.h
     ui/text/text_entity.cpp
     ui/text/text_entity.h
     ui/text/text_extended_data.cpp
@@ -329,6 +334,7 @@ PRIVATE
     ui/ui_utility.cpp
     ui/ui_utility.h
 
+    ui/ui_fixed.h
     ui/ui_pch.h
 
     emoji_suggestions/emoji_suggestions.cpp

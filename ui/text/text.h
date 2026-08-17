@@ -10,6 +10,7 @@
 #include "ui/click_handler.h"
 #include "base/flags.h"
 #include "ui/style/style_core_types.h"
+#include "ui/ui_fixed.h"
 
 #include <crl/crl_time.h>
 
@@ -459,8 +460,8 @@ private:
 	};
 
 	struct LineMetrics {
-		QFixed ascent = 0;
-		QFixed descent = 0;
+		Fixed ascent;
+		Fixed descent;
 
 		[[nodiscard]] int height() const {
 			return (ascent + descent).toInt();
@@ -486,7 +487,7 @@ private:
 	[[nodiscard]] QMargins quotePadding(QuoteDetails *quote) const;
 	[[nodiscard]] int quoteMinWidth(QuoteDetails *quote) const;
 	[[nodiscard]] const QString &quoteHeaderText(QuoteDetails *quote) const;
-	[[nodiscard]] QFixed blockBaselineShift(const AbstractBlock *block) const;
+	[[nodiscard]] Fixed blockBaselineShift(const AbstractBlock *block) const;
 	[[nodiscard]] LineMetrics defaultLineMetrics() const;
 	[[nodiscard]] LineMetrics resolveLineMetrics(
 		int lineStart,

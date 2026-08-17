@@ -7,9 +7,9 @@
 #pragma once
 
 #include "ui/text/text.h"
+#include "ui/text/text_script_analysis.h"
 
-#include <private/qunicodetables_p.h>
-#include <private/qtextengine_p.h>
+#include <QtCore/QDebug>
 
 #define BIDI_DEBUG if (1) ; else qDebug
 
@@ -21,7 +21,7 @@ class BidiAlgorithm {
 public:
 	template<typename T> using Vector = QVarLengthArray<T, 64>;
 
-	BidiAlgorithm(const QChar *text, QScriptAnalysis *analysis, int length, bool baseDirectionIsRtl,
+	BidiAlgorithm(const QChar *text, ScriptAnalysis *analysis, int length, bool baseDirectionIsRtl,
 		Blocks::const_iterator startInBlocks,
 		Blocks::const_iterator endInBlocks,
 		int offsetInBlocks)
@@ -54,13 +54,13 @@ public:
 				++i;
 				analysis[i].bidiDirection = QChar::DirNSM;
 			}
-			const auto p = info.properties;
-			analysis[pos].bidiDirection = QChar::Direction(p->direction);
-			switch (QChar::Direction(p->direction)) {
+			const auto direction = info.direction();
+			analysis[pos].bidiDirection = direction;
+			switch (direction) {
 			case QChar::DirON:
 				// all mirrored chars are DirON
-				if (p->mirrorDiff)
-					analysis[pos].bidiFlags = QScriptAnalysis::BidiMirrored;
+				if (info.mirrored())
+					analysis[pos].bidiFlags = ScriptAnalysis::BidiMirrored;
 				break;
 			case QChar::DirLRE:
 			case QChar::DirRLE:
@@ -68,7 +68,7 @@ public:
 			case QChar::DirRLO:
 			case QChar::DirPDF:
 			case QChar::DirBN:
-				analysis[pos].bidiFlags = QScriptAnalysis::BidiMaybeResetToParagraphLevel|QScriptAnalysis::BidiBN;
+				analysis[pos].bidiFlags = ScriptAnalysis::BidiMaybeResetToParagraphLevel|ScriptAnalysis::BidiBN;
 				break;
 			case QChar::DirLRI:
 			case QChar::DirRLI:
@@ -78,7 +78,7 @@ public:
 					isolatePairs.append({ pos, length });
 				}
 				++isolateLevel;
-				analysis[pos].bidiFlags = QScriptAnalysis::BidiMaybeResetToParagraphLevel;
+				analysis[pos].bidiFlags = ScriptAnalysis::BidiMaybeResetToParagraphLevel;
 				break;
 			case QChar::DirPDI:
 				if (isolateLevel > 0) {
@@ -88,11 +88,11 @@ public:
 				}
 				Q_FALLTHROUGH();
 			case QChar::DirWS:
-				analysis[pos].bidiFlags = QScriptAnalysis::BidiMaybeResetToParagraphLevel;
+				analysis[pos].bidiFlags = ScriptAnalysis::BidiMaybeResetToParagraphLevel;
 				break;
 			case QChar::DirS:
 			case QChar::DirB:
-				analysis[pos].bidiFlags = QScriptAnalysis::BidiResetToParagraphLevel;
+				analysis[pos].bidiFlags = ScriptAnalysis::BidiResetToParagraphLevel;
 				if (text[pos] == QChar::ParagraphSeparator) {
 					// close all open isolates as we start a new paragraph
 					while (isolateLevel > 0) {
@@ -545,7 +545,7 @@ public:
 
 		bool isValid() const { return second > 0; }
 
-		QChar::Direction containedDirection(const QScriptAnalysis *analysis, QChar::Direction embeddingDir) const {
+		QChar::Direction containedDirection(const ScriptAnalysis *analysis, QChar::Direction embeddingDir) const {
 			int isolateCounter = 0;
 			QChar::Direction containedDir = QChar::DirON;
 			for (int i = first + 1; i < second; ++i) {
@@ -620,19 +620,19 @@ public:
 				int pos = *it;
 				QChar::Direction dir = analysis[pos].bidiDirection;
 				if (dir == QChar::DirON) {
-					const QUnicodeTables::Properties *p = infoAt(pos).properties;
-					if (p->mirrorDiff) {
+					const auto info = infoAt(pos);
+					if (info.mirrored()) {
 						// either opening or closing bracket
-						if (p->category == QChar::Punctuation_Open) {
+						if (info.category() == QChar::Punctuation_Open) {
 							// opening bracked
-							uint closingBracked = text[pos].unicode() + p->mirrorDiff;
+							uint closingBracked = uint(info.mirroredChar());
 							bracketStack.push(closingBracked, bracketPairs.size());
 							if (bracketStack.overflowed()) {
 								bracketPairs.clear();
 								break;
 							}
 							bracketPairs.append({ pos, -1 });
-						} else if (p->category == QChar::Punctuation_Close) {
+						} else if (info.category() == QChar::Punctuation_Close) {
 							int pairPos = bracketStack.match(text[pos].unicode());
 							if (pairPos != -1)
 								bracketPairs[pairPos].second = pos;
@@ -687,7 +687,7 @@ public:
 				BIDI_DEBUG() << "    2: resolve bracket pair" << i << "to" << lastStrong;
 			}
 			for (int i = pair.second + 1; i < length; ++i) {
-				if (infoAt(i).properties->direction == QChar::DirNSM)
+				if (infoAt(i).direction() == QChar::DirNSM)
 					analysis[i].bidiDirection = analysis[pair.second].bidiDirection;
 				else
 					break;
@@ -852,7 +852,7 @@ public:
 			return true;
 		for (int i = 0; i < length; ++i) {
 			if (text[i].unicode() >= 0x590) {
-				switch (infoAt(i).properties->direction) {
+				switch (infoAt(i).direction()) {
 				case QChar::DirR: case QChar::DirAN:
 				case QChar::DirLRE: case QChar::DirLRO: case QChar::DirAL:
 				case QChar::DirRLE: case QChar::DirRLO: case QChar::DirPDF:
@@ -868,7 +868,7 @@ public:
 
 	bool process()
 	{
-		memset(analysis, 0, length * sizeof(QScriptAnalysis));
+		memset(analysis, 0, length * sizeof(ScriptAnalysis));
 
 		bool hasBidi = checkForBidi();
 
@@ -901,11 +901,11 @@ public:
 		// Rule L1:
 		bool resetLevel = true;
 		for (int i = length - 1; i >= 0; --i) {
-			if (analysis[i].bidiFlags & QScriptAnalysis::BidiResetToParagraphLevel) {
+			if (analysis[i].bidiFlags & ScriptAnalysis::BidiResetToParagraphLevel) {
 				BIDI_DEBUG() << "resetting pos" << i << "to baselevel";
 				analysis[i].bidiLevel = baseLevel;
 				resetLevel = true;
-			} else if (resetLevel && analysis[i].bidiFlags & QScriptAnalysis::BidiMaybeResetToParagraphLevel) {
+			} else if (resetLevel && analysis[i].bidiFlags & ScriptAnalysis::BidiMaybeResetToParagraphLevel) {
 				BIDI_DEBUG() << "resetting pos" << i << "to baselevel (maybereset flag)";
 				analysis[i].bidiLevel = baseLevel;
 			} else {
@@ -919,7 +919,7 @@ public:
 		int lastLevel = baseLevel;
 		int lastBNPos = -1;
 		for (int i = 0; i < length; ++i) {
-			if (analysis[i].bidiFlags & QScriptAnalysis::BidiBN) {
+			if (analysis[i].bidiFlags & ScriptAnalysis::BidiBN) {
 				if (lastBNPos < 0)
 					lastBNPos = i;
 				analysis[i].bidiLevel = lastLevel;
@@ -955,7 +955,7 @@ public:
 
 
 	const QChar *text;
-	QScriptAnalysis *analysis;
+	ScriptAnalysis *analysis;
 	int length;
 	char baseLevel;
 
@@ -964,9 +964,26 @@ public:
 	mutable Blocks::const_iterator _currentBlock;
 	int _offsetInBlocks;
 
+	// QChar's statics read the very same QUnicodeTables::Properties record:
+	// QChar::direction/category are thin wrappers over qGetProp(), and
+	// QChar::mirroredChar(uc) is literally `uc + qGetProp(uc)->mirrorDiff`.
+	// So this is the same data as the private table, not an approximation.
 	struct Info {
-		const QUnicodeTables::Properties *properties = nullptr;
+		char32_t code = 0;
 		bool surrogate = false;
+
+		[[nodiscard]] QChar::Direction direction() const {
+			return QChar::direction(code);
+		}
+		[[nodiscard]] QChar::Category category() const {
+			return QChar::category(code);
+		}
+		[[nodiscard]] char32_t mirroredChar() const {
+			return QChar::mirroredChar(code);
+		}
+		[[nodiscard]] bool mirrored() const {
+			return mirroredChar() != code;
+		}
 	};
 	[[nodiscard]] Info infoAt(int i) const {
 		if (_currentBlock != _startInBlocks
@@ -983,30 +1000,65 @@ public:
 		const auto object = (type == TextBlockType::Emoji)
 			|| (type == TextBlockType::CustomEmoji)
 			|| (type == TextBlockType::Skip);
+		if (object) {
+			return { .code = char32_t(QChar::ObjectReplacementCharacter) };
+		}
 
-		constexpr auto kQt5 = (QT_VERSION < QT_VERSION_CHECK(6, 0, 0));
-		using wide = std::conditional_t<kQt5, uint, char32_t>;
-		using narrow = std::conditional_t<kQt5, ushort, char16_t>;
-
-		auto uc = wide(text[i].unicode());
-		if (QChar::isHighSurrogate(uc) && i < length - 1 && text[i + 1].isLowSurrogate()) {
-			uc = QChar::surrogateToUcs4(ushort(uc), text[i + 1].unicode());
-
+		const auto uc = char32_t(text[i].unicode());
+		if (QChar::isHighSurrogate(uc)
+			&& i < length - 1
+			&& text[i + 1].isLowSurrogate()) {
 			return {
-				.properties = QUnicodeTables::properties(object
-					? wide(QChar::ObjectReplacementCharacter)
-					: uc),
+				.code = char32_t(QChar::surrogateToUcs4(
+					ushort(uc),
+					text[i + 1].unicode())),
 				.surrogate = true,
 			};
 		}
-		return {
-			.properties = QUnicodeTables::properties(object
-				? narrow(QChar::ObjectReplacementCharacter)
-				: narrow(uc)),
-			.surrogate = false,
-		};
+		return { .code = uc };
 	}
 };
+
+// UAX#9 rule L2, reimplemented from QTextEngine::bidiReorder: from the highest
+// level down to the lowest odd one, reverse every contiguous run at or above
+// that level.
+inline void BidiReorder(int count, const uchar *levels, int *visualOrder) {
+	auto levelLow = uchar(128);
+	auto levelHigh = uchar(0);
+	for (auto i = 0; i != count; ++i) {
+		if (levels[i] > levelHigh) {
+			levelHigh = levels[i];
+		}
+		if (levels[i] < levelLow) {
+			levelLow = levels[i];
+		}
+	}
+	if (!(levelLow % 2)) {
+		++levelLow;
+	}
+	for (auto i = 0; i != count; ++i) {
+		visualOrder[i] = i;
+	}
+	const auto last = count - 1;
+	while (levelHigh >= levelLow) {
+		auto i = 0;
+		while (i < last) {
+			while (i < last && levels[i] < levelHigh) {
+				++i;
+			}
+			const auto start = i;
+			while (i <= last && levels[i] >= levelHigh) {
+				++i;
+			}
+			const auto end = i - 1;
+			for (auto j = 0; j != (end - start + 1) / 2; ++j) {
+				std::swap(visualOrder[start + j], visualOrder[end - j]);
+			}
+			++i;
+		}
+		--levelHigh;
+	}
+}
 
 } // namespace Ui::Text
 

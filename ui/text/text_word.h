@@ -7,8 +7,7 @@
 #pragma once
 
 #include "base/basic_types.h"
-
-#include <private/qfixed_p.h>
+#include "ui/ui_fixed.h"
 
 namespace Ui::Text {
 
@@ -18,13 +17,13 @@ public:
 	Word( // !newline
 		uint16 position,
 		bool unfinished,
-		QFixed width,
-		QFixed rbearing)
+		Fixed width,
+		Fixed rbearing)
 	: _position(position)
-	, _rbearing_modulus(std::min(std::abs(rbearing.value()), 0x1FFF))
-	, _rbearing_positive(rbearing.value() > 0 ? 1 : 0)
+	, _rbearing_modulus(std::min(std::abs(rbearing.raw()), 0x1FFF))
+	, _rbearing_positive(rbearing.raw() > 0 ? 1 : 0)
 	, _unfinished(unfinished ? 1 : 0)
-	, _qfixedwidth(width.value()) {
+	, _qfixedwidth(width.raw()) {
 	}
 	Word(uint16 position, int newlineBlockIndex)
 	: _position(position)
@@ -45,18 +44,18 @@ public:
 	[[nodiscard]] uint16 position() const {
 		return _position;
 	}
-	[[nodiscard]] QFixed f_rbearing() const {
-		return QFixed::fromFixed(
+	[[nodiscard]] Fixed f_rbearing() const {
+		return Fixed::FromRaw(
 			int(_rbearing_modulus) * (_rbearing_positive ? 1 : -1));
 	}
-	[[nodiscard]] QFixed f_width() const {
-		return _newline ? 0 : QFixed::fromFixed(_qfixedwidth);
+	[[nodiscard]] Fixed f_width() const {
+		return _newline ? Fixed() : Fixed::FromRaw(_qfixedwidth);
 	}
-	[[nodiscard]] QFixed f_rpadding() const {
+	[[nodiscard]] Fixed f_rpadding() const {
 		return _rpadding;
 	}
 
-	void add_rpadding(QFixed padding) {
+	void add_rpadding(Fixed padding) {
 		_rpadding += padding;
 	}
 
@@ -72,7 +71,7 @@ private:
 	// with a space before a link has started. If text block has a leading spaces
 	// (for example a text block after a link block) it is prepended with an empty
 	// word that holds those spaces as a right padding.
-	QFixed _rpadding;
+	Fixed _rpadding;
 
 	union {
 		int _qfixedwidth;

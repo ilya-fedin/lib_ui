@@ -12,13 +12,68 @@
 namespace Ui::Text {
 namespace {
 
-constexpr auto kMaxItemLength = 4096;
+// Shaping an item costs more than linear in its length, so a long message is
+// much cheaper as many short items than as few long ones - hence a cap far
+// below the 4096 the engine used to carry. Past the soft cap an item is only
+// cut in front of a space, where a cursive script joins nothing anyway; the
+// hard cap catches the scripts that write without spaces at all.
+constexpr auto kMaxItemLength = 64;
+constexpr auto kMaxItemLengthHard = 1024;
+
+// Ported from QUnicodeTools::initScripts, which is what the engine used to
+// call. A character of the Unknown, Inherited or Common script keeps the run it
+// is in, so punctuation and spaces belong to the text around them, and a
+// combining mark always follows its base character whatever its own script
+// says. Anything less - QChar::script() taken per character - would move the
+// item boundaries.
+void FillScripts(QStringView text, ScriptAnalysis *analysis) {
+	const auto size = int(text.size());
+	const auto fill = [&](int from, int till, QChar::Script script) {
+		for (auto i = from; i != till; ++i) {
+			analysis[i].script = script;
+		}
+	};
+	auto start = 0;
+	auto script = QChar::Script_Common;
+	auto i = 0;
+	while (i != size) {
+		const auto at = i;
+		auto ucs4 = char32_t(text[i].unicode());
+		if (text[i].isHighSurrogate()
+			&& (i + 1 != size)
+			&& text[i + 1].isLowSurrogate()) {
+			ucs4 = QChar::surrogateToUcs4(text[i], text[i + 1]);
+			i += 2;
+		} else {
+			++i;
+		}
+		const auto next = QChar::script(ucs4);
+		if (next == script || next <= QChar::Script_Common) {
+			continue;
+		} else if (script <= QChar::Script_Common) {
+			// Also covers a Common base character followed by combining marks
+			// that are neither Inherited nor Common.
+			script = next;
+			continue;
+		}
+		const auto category = QChar::category(ucs4);
+		if (category == QChar::Mark_NonSpacing
+			|| category == QChar::Mark_SpacingCombining
+			|| category == QChar::Mark_Enclosing) {
+			continue;
+		}
+		fill(start, at, script);
+		start = at;
+		script = next;
+	}
+	fill(start, size, script);
+}
 
 } // namespace
 
 StackEngine::StackEngine(
 	not_null<const String*> t,
-	gsl::span<QScriptAnalysis> analysis,
+	gsl::span<ScriptAnalysis> analysis,
 	int from,
 	int till,
 	int blockIndexHint)
@@ -38,7 +93,7 @@ StackEngine::StackEngine(
 	not_null<const String*> t,
 	int offset,
 	const QString &text,
-	gsl::span<QScriptAnalysis> analysis,
+	gsl::span<ScriptAnalysis> analysis,
 	int blockIndexHint,
 	int blockIndexLimit)
 : _t(t)
@@ -47,7 +102,6 @@ StackEngine::StackEngine(
 , _offset(offset)
 , _positionEnd(_offset + _text.size())
 , _font(_t->_st->font)
-, _engine(_text, _font->f)
 , _tBlocks(_t->_blocks)
 , _bStart(begin(_tBlocks) + blockIndexHint)
 , _bEnd((blockIndexLimit >= 0)
@@ -56,7 +110,6 @@ StackEngine::StackEngine(
 , _bCached(_bStart) {
 	Expects(analysis.size() >= _text.size());
 
-	_engine.validate();
 	itemize();
 }
 
@@ -83,36 +136,19 @@ int StackEngine::blockEnd(std::vector<Block>::const_iterator i) const {
 }
 
 void StackEngine::itemize() {
-	const auto layoutData = _engine.layoutData;
-	if (layoutData->items.size()) {
+	if (!_items.empty()) {
 		return;
 	}
 
-	const auto length = layoutData->string.length();
+	const auto length = int(_text.size());
 	if (!length) {
 		return;
 	}
 
 	_bStart = adjustBlock(_offset);
-	const auto chars = _engine.layoutData->string.constData();
+	const auto chars = _text.constData();
 
-	{
-#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
-		QUnicodeTools::ScriptItemArray scriptItems;
-		QUnicodeTools::initScripts(_engine.layoutData->string, &scriptItems);
-		for (int i = 0; i < scriptItems.length(); ++i) {
-			const auto &item = scriptItems.at(i);
-			int end = i < scriptItems.length() - 1 ? scriptItems.at(i + 1).position : length;
-			for (int j = item.position; j < end; ++j)
-				_analysis[j].script = item.script;
-		}
-#else // Qt >= 6.0.0
-		QVarLengthArray<uchar> scripts(length);
-		QUnicodeTools::initScripts(reinterpret_cast<const ushort*>(chars), length, scripts.data());
-		for (int i = 0; i < length; ++i)
-			_analysis[i].script = scripts.at(i);
-#endif // Qt < 6.0.0
-	}
+	FillScripts(_text, _analysis);
 
 	// Override script and flags for object-like blocks.
 	const auto end = _offset + length;
@@ -130,15 +166,15 @@ void StackEngine::itemize() {
 						(type == TextBlockType::Emoji)
 						&& (chars[i] == QChar::Space);
 					_analysis[i].flags = emojiTrailingSpace
-						? QScriptAnalysis::None
-						: QScriptAnalysis::Object;
+						? ScriptAnalysis::None
+						: ScriptAnalysis::Object;
 				}
 			} else {
 				for (auto i = from - _offset, count = till - _offset; i != count; ++i) {
 					if (chars[i] == QChar::LineFeed) {
-						_analysis[i].flags = QScriptAnalysis::LineOrParagraphSeparator;
+						_analysis[i].flags = ScriptAnalysis::LineOrParagraphSeparator;
 					} else {
-						_analysis[i].flags = QScriptAnalysis::None;
+						_analysis[i].flags = ScriptAnalysis::None;
 					}
 				}
 			}
@@ -146,9 +182,8 @@ void StackEngine::itemize() {
 	}
 
 	{
-		auto &m_string = _engine.layoutData->string;
+		auto &m_string = _text;
 		auto m_analysis = _analysis;
-		auto &m_items = _engine.layoutData->items;
 
 		auto start = 0;
 		auto startBlock = _bStart;
@@ -194,16 +229,57 @@ void StackEngine::itemize() {
 			} else if (m_analysis[i].bidiLevel == m_analysis[start].bidiLevel
 				&& m_analysis[i].flags == m_analysis[start].flags
 				&& (m_analysis[i].script == m_analysis[start].script || m_string[i] == u'.')
-				//&& m_analysis[i].flags < QScriptAnalysis::SpaceTabOrObject // only emojis are objects here, no tabs
-				&& i - start < kMaxItemLength) {
+				//&& m_analysis[i].flags < ScriptAnalysis::SpaceTabOrObject // only emojis are objects here, no tabs
+				//
+				// Past the length limit the item is only cut in front of a
+				// space. Shaping costs more than linear in the item length, so
+				// short items are worth having, but a cut inside a word would
+				// separate letters that a cursive script joins - while a
+				// letter before a space takes its final form either way, so a
+				// cut there changes nothing. Scripts that write without spaces
+				// would never find that point, hence the hard limit as well;
+				// none of them are cursive, and no word runs that long.
+				&& (i - start < kMaxItemLength
+					|| (!m_string[i].isSpace()
+						&& i - start < kMaxItemLengthHard))) {
 				continue;
 			}
-			m_items.append(QScriptItem(start, m_analysis[start]));
+			appendItem(start, i, m_analysis[start]);
 			start = i;
 			startBlock = currentBlock;
 		}
-		m_items.append(QScriptItem(start, m_analysis[start]));
+		appendItem(start, length, m_analysis[start]);
 	}
+}
+
+void StackEngine::appendItem(int from, int till, ScriptAnalysis analysis) {
+	auto item = Item();
+	// Positions are relative to this engine's string, exactly like
+	// QScriptItem::position - the renderer builds an engine per line.
+	item.position = from;
+	item.length = till - from;
+	item.analysis = analysis;
+	item.blockIndex = blockIndex(from);
+	if (analysis.flags == ScriptAnalysis::Object) {
+		// Objects are never shaped, their width is the block's own.
+		item.width = Fixed((*adjustBlock(_offset + from))->objectWidth());
+	}
+	_items.push_back(item);
+}
+
+style::font StackEngine::itemFont(const Item &item) const {
+	return WithFlags(_t->_st->font, _tBlocks[item.blockIndex]->flags());
+}
+
+int StackEngine::itemIndexAt(int position) const {
+	for (auto i = 0, count = int(_items.size()); i != count; ++i) {
+		const auto &item = _items[i];
+		if (position >= item.position
+			&& position < item.position + item.length) {
+			return i;
+		}
+	}
+	return -1;
 }
 
 void StackEngine::updateFont(not_null<const AbstractBlock*> block) {
@@ -213,20 +289,14 @@ void StackEngine::updateFont(not_null<const AbstractBlock*> block) {
 		_font = (newFont->family() == _t->_st->font->family())
 			? WithFlags(_t->_st->font, flags, newFont->flags())
 			: newFont;
-		_engine.fnt = newFont;
-		_engine.resetFontEngineCache();
 	}
 }
 
 std::vector<Block>::const_iterator StackEngine::shapeGetBlock(int item) {
-	auto &si = _engine.layoutData->items[item];
+	const auto &si = _items[item];
 	const auto blockIt = adjustBlock(_offset + si.position);
 	const auto block = blockIt->get();
 	updateFont(block);
-	_engine.shape(item);
-	if (si.analysis.flags == QScriptAnalysis::Object) {
-		si.width = block->objectWidth();
-	}
 	return blockIt;
 }
 
