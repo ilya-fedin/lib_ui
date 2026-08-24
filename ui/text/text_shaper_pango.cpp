@@ -1019,10 +1019,15 @@ struct ShapeEntry {
 	LineAttributes *attributes = nullptr;
 	int attributesShift = 0;
 
-	// The clusters of the line and the range in them that is this item's.
+	// The clusters of the line and the range in them that is this item's, and
+	// where the last question about them was answered: they are asked about in
+	// the order the letters go far more often than not, so the next answer is
+	// almost always the next entry, and a search over the whole table for each
+	// of them is work that the walk itself already did.
 	const ClusterTables *tables = nullptr;
 	int clusterFrom = 0;
 	int clusterCount = 0;
+	mutable int clusterHint = 0;
 
 	// Where the end of the item is, which is its width for text that goes to
 	// the right and the left edge for text that goes to the left.
@@ -1467,10 +1472,21 @@ namespace {
 	// first.
 	const auto byte = entry.text->toUtf8(entry.position + offset);
 	const auto at = entry.text->toUtf16(byte) - entry.position;
-	const auto from = begin(entry.tables->starts) + entry.clusterFrom;
+	const auto begins = begin(entry.tables->starts);
+	const auto from = begins + entry.clusterFrom;
 	const auto till = from + entry.clusterCount;
-	const auto i = std::lower_bound(from, till, at);
-	return (i != till && *i == at) ? int(i - begin(entry.tables->starts)) : -1;
+
+	// From where the one before was answered, when the question is not behind
+	// it - the table is sorted, so the answer can only be there or later.
+	const auto hinted = from + std::clamp(
+		entry.clusterHint,
+		0,
+		entry.clusterCount);
+	const auto i = ((hinted != till) && (*hinted <= at))
+		? std::lower_bound(hinted, till, at)
+		: std::lower_bound(from, till, at);
+	entry.clusterHint = int(i - from);
+	return (i != till && *i == at) ? int(i - begins) : -1;
 }
 
 // The glyph a letter is drawn as, or -1 when it is drawn as a part of another.
@@ -1537,7 +1553,13 @@ int ShapedItem::clusterEnd(int offset, int tillOffset) const {
 	const auto &entry = *_entry;
 	const auto from = begin(entry.tables->starts) + entry.clusterFrom;
 	const auto till = from + entry.clusterCount;
-	const auto i = std::upper_bound(from, till, offset);
+	const auto hinted = from + std::clamp(
+		entry.clusterHint,
+		0,
+		entry.clusterCount);
+	const auto i = ((hinted != till) && (*hinted <= offset))
+		? std::upper_bound(hinted, till, offset)
+		: std::upper_bound(from, till, offset);
 	return (i != till) ? std::min(*i, tillOffset) : tillOffset;
 }
 
