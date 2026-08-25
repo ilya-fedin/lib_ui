@@ -34,6 +34,7 @@
 #include <QtGui/QPaintEngine>
 #include <QtGui/QBackingStore>
 #include <QtGui/QWindow>
+#include <QtWidgets/QApplication>
 #include <QtWidgets/QWidget>
 
 namespace Ui::Text {
@@ -274,10 +275,10 @@ void ReorderVisually(
 // default - _cairo_ft_options_merge() in cairo-ft-font.c, where the options
 // handed in are the ones accumulated into. So rules written for a family or
 // for a range of sizes keep applying to whatever the desktop did not name.
-// Asked once, at the one place the answer is needed: the context every font is
-// loaded through carries it from there on, and the portal answers over the bus.
-[[nodiscard]] const cairo_font_options_t *SystemFontOptions() {
-	static const auto result = []() -> cairo_font_options_t* {
+// Asked at the one place the answer is needed: the context every font is
+// loaded through carries it from there on.
+[[nodiscard]] cairo_font_options_t *MakeSystemFontOptions() {
+	const auto make = []() -> cairo_font_options_t* {
 #ifdef LIB_UI_PANGO_OVER_FONTCONFIG
 		const auto settings = Platform::FontSettings();
 		if (!settings.antialias && !settings.hinting) {
@@ -334,8 +335,29 @@ void ReorderVisually(
 #else // LIB_UI_PANGO_OVER_FONTCONFIG
 		return nullptr;
 #endif // !LIB_UI_PANGO_OVER_FONTCONFIG
-	}();
-	return result;
+	};
+	return make();
+}
+
+// Put on the context, which copies them, so nothing of ours is kept: what the
+// desktop says can be said again, and then this is how the new answer arrives.
+void ApplySystemFontOptions(PangoContext *context) {
+	const auto options = MakeSystemFontOptions();
+	pango_cairo_context_set_font_options(context, options);
+	if (options) {
+		cairo_font_options_destroy(options);
+	}
+}
+
+// Everything drawn from a font is drawn differently now, and none of it is
+// text a widget knows it has to draw again - so they are told the way Qt tells
+// them a font of the application changed, which ends in update() on every one
+// of them and in the layouts around them being counted anew.
+void NotifyFontOptionsChanged() {
+	auto event = QEvent(QEvent::FontChange);
+	for (const auto widget : QApplication::allWidgets()) {
+		QCoreApplication::sendEvent(widget, &event);
+	}
 }
 
 // Kept for the whole library: building it lists the fonts of the system once.
@@ -363,12 +385,20 @@ void ReorderVisually(
 // The settings of the desktop are put on the context, because that is what
 // every font loaded through it is then made with - metrics and rasterization
 // alike, instead of only the glyphs of a call that hands them over itself.
+// Saying it again is all a change of them takes: Pango marks the context as
+// changed and drops the fonts it made for the old answer.
 [[nodiscard]] PangoContext *Context() {
 	static const auto result = [] {
 		const auto context = pango_font_map_create_context(FontMap());
-		if (const auto options = SystemFontOptions()) {
-			pango_cairo_context_set_font_options(context, options);
-		}
+		ApplySystemFontOptions(context);
+#ifdef LIB_UI_PANGO_OVER_FONTCONFIG
+		static auto lifetime = rpl::lifetime();
+		Platform::FontSettingsChanges(
+		) | rpl::on_next([=] {
+			ApplySystemFontOptions(context);
+			NotifyFontOptionsChanged();
+		}, lifetime);
+#endif // LIB_UI_PANGO_OVER_FONTCONFIG
 		return context;
 	}();
 	return result;

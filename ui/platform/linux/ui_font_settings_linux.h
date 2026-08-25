@@ -34,8 +34,16 @@ struct FontRenderSettings {
 	std::optional<FontAntialias> antialias;
 	std::optional<FontHinting> hinting;
 	std::optional<FontSubpixelOrder> subpixelOrder;
+
+	friend inline bool operator==(
+		const FontRenderSettings &,
+		const FontRenderSettings &) = default;
 };
 
 [[nodiscard]] FontRenderSettings FontSettings();
+
+// Fires when the desktop is told something else than it was told before, so
+// that the text drawn with the old answer can be drawn again with the new one.
+[[nodiscard]] rpl::producer<> FontSettingsChanges();
 
 } // namespace Ui::Platform

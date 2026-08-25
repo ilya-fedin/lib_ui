@@ -8,6 +8,7 @@
 
 #include "base/platform/linux/base_linux_xdp_utilities.h"
 #include "base/platform/linux/base_linux_xsettings.h"
+#include "base/integration.h"
 
 #include <QtCore/QVariant>
 
@@ -156,12 +157,75 @@ void Fill(FontRenderSettings &result, Fn<FontRenderSettings()> next) {
 	return result;
 }
 
+// Watched in both places the answer is read from, because which of them
+// answers is not known until it is asked: a session with an XSettings manager
+// is told there, one without it is told over the portal.
+struct Watch {
+	FontRenderSettings last;
+	rpl::event_stream<> changes;
+	rpl::lifetime lifetime;
+	std::optional<base::Platform::XDP::SettingWatcher> watcher;
+};
+
+[[nodiscard]] bool IsFontKey(const std::string &group, const std::string &key) {
+	return ((group == "org.gnome.desktop.interface")
+		&& (key == "font-antialiasing"
+			|| key == "font-hinting"
+			|| key == "font-rgba-order"))
+		|| ((group == "org.gnome.settings-daemon.plugins.xsettings")
+			&& (key == "antialiasing"
+				|| key == "hinting"
+				|| key == "rgba-order"));
+}
+
 } // namespace
 
 FontRenderSettings FontSettings() {
 	auto result = FromXSettings();
 	Fill(result, FromPortal);
 	return result;
+}
+
+rpl::producer<> FontSettingsChanges() {
+	static const auto watch = [] {
+		auto result = std::make_unique<Watch>();
+		result->last = FontSettings();
+		const auto raw = result.get();
+		const auto changed = [=] {
+			base::Integration::Instance().enterFromEventLoop([=] {
+				auto now = FontSettings();
+				if (now != raw->last) {
+					raw->last = now;
+					raw->changes.fire({});
+				}
+			});
+		};
+		using base::Platform::XCB::XSettings;
+		if (const auto xSettings = XSettings::Instance()) {
+			for (const auto name : {
+				"Xft/Antialias",
+				"Xft/Hinting",
+				"Xft/HintStyle",
+				"Xft/RGBA",
+			}) {
+				result->lifetime.add(xSettings->registerCallbackForProperty(
+					name,
+					[=](xcb_connection_t*, const QByteArray&, const QVariant&) {
+						changed();
+					}));
+			}
+		}
+		result->watcher.emplace([=](
+				const std::string &group,
+				const std::string &key,
+				gi::repository::GLib::Variant) {
+			if (IsFontKey(group, key)) {
+				changed();
+			}
+		});
+		return result;
+	}();
+	return watch->changes.events();
 }
 
 } // namespace Ui::Platform
