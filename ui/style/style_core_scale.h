@@ -30,6 +30,7 @@ void SetScale(int scale);
 
 [[nodiscard]] int MaxScaleForRatio(int ratio);
 [[nodiscard]] int CheckScale(int scale);
+[[nodiscard]] int BaseDPI();
 
 template <typename T>
 [[nodiscard]] inline T ConvertScale(T value, int scale) {

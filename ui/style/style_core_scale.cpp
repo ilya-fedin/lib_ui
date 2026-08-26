@@ -7,6 +7,7 @@
 #include "ui/style/style_core_scale.h"
 
 #include "base/assertion.h"
+#include "base/platform/base_platform_info.h"
 
 namespace style {
 namespace {
@@ -44,6 +45,10 @@ int CheckScale(int scale) {
 	return (scale == kScaleAuto)
 		? kScaleAuto
 		: std::clamp(scale, kScaleMin, MaxScaleForRatio(DevicePixelRatio()));
+}
+
+int BaseDPI() {
+	return Platform::IsMac() ? 72 : 96;
 }
 
 } // namespace style
