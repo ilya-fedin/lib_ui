@@ -6,6 +6,7 @@
 //
 #include "ui/widgets/tooltip.h"
 
+#include "base/platform/base_platform_info.h"
 #include "ui/integration.h"
 #include "ui/ui_utility.h"
 #include "ui/painter.h"
@@ -20,7 +21,6 @@
 #include <QtGui/QScreen>
 #include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
-#include <qpa/qplatformwindow_p.h>
 
 namespace Ui {
 
@@ -116,24 +116,29 @@ void Tooltip::popup(const QPoint &m, const QString &text, const style::Tooltip *
 		p.setX(m.x() - (s.width() / 2));
 	}
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 11, 0) && defined QT_FEATURE_wayland && QT_CONFIG(wayland)
-	using namespace QNativeInterface::Private;
-	create();
-	if (const auto native
-			= windowHandle()->nativeInterface<QWaylandWindow>()) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0) && defined QT_FEATURE_wayland && QT_CONFIG(wayland)
+	if (::Platform::IsWayland()) {
 		// Tooltip::performShow ensures our window is active
 		const auto w = not_null(QApplication::activeWindow())->pos();
-		native->setParentControlGeometry(
+		create();
+		windowHandle()->setProperty(
+			"_q_waylandPopupAnchor",
+			QVariant::fromValue(Qt::BottomEdge | Qt::LeftEdge));
+		windowHandle()->setProperty(
+			"_q_waylandPopupGravity",
+			QVariant::fromValue(Qt::BottomEdge | Qt::RightEdge));
+		windowHandle()->setProperty(
+			"_q_waylandPopupConstraintAdjustment",
+			1 | 8 | 2);
+		windowHandle()->setProperty(
+			"_q_waylandPopupAnchorRect",
 			QRect(
 				QPoint(
 					m.x() - w.x() + _st->shift.x(),
 					m.y() - w.y() - _st->skip),
 				QSize(-_st->shift.x() * 2, _st->shift.y() + _st->skip)));
-		// even though Qt has tooltip type, our tooltip behaves like a menu
-		// (bottom left origin, no flip_x)
-		native->setExtendedWindowType(QWaylandWindow::Menu);
 	}
-#endif // Qt >= 6.11.0 && wayland
+#endif // Qt >= 6.6.0 && wayland
 
 	const auto screen = QGuiApplication::screenAt(m);
 	if (screen) {

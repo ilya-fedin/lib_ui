@@ -27,7 +27,6 @@
 #include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
 #include <private/qapplication_p.h>
-#include <qpa/qplatformwindow_p.h>
 
 namespace Ui {
 namespace {
@@ -1045,16 +1044,30 @@ bool PopupMenu::prepareGeometryFor(
 			0),
 		_padding.top() - _topShift);
 	auto r = screen ? screen->availableGeometry() : QRect();
-#if QT_VERSION >= QT_VERSION_CHECK(6, 11, 0) && defined QT_FEATURE_wayland && QT_CONFIG(wayland)
-	using namespace QNativeInterface::Private;
-	if (const auto native
-			= windowHandle()->nativeInterface<QWaylandWindow>()) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 6, 0) && defined QT_FEATURE_wayland && QT_CONFIG(wayland)
+	if (::Platform::IsWayland()) {
 		const auto padding = _additionalMenuPadding - _additionalMenuMargins;
 		base::take(r);
+		windowHandle()->setProperty(
+			"_q_waylandPopupAnchor",
+			QVariant::fromValue(Qt::BottomEdge | Qt::LeftEdge));
+		windowHandle()->setProperty(
+			"_q_waylandPopupGravity",
+			QVariant::fromValue(Qt::BottomEdge | Qt::RightEdge));
+		windowHandle()->setProperty(
+			"_q_waylandPopupConstraintAdjustment",
+			1 | 8 | 2);
 		if (_parent) {
 			// we must have an action to position the submenu around
 			Assert(parentActionWidget != nullptr);
-			native->setParentControlGeometry(
+			windowHandle()->setProperty(
+				"_q_waylandPopupAnchor",
+				QVariant::fromValue(Qt::TopEdge | Qt::RightEdge));
+			windowHandle()->setProperty(
+				"_q_waylandPopupConstraintAdjustment",
+				4 | 2);
+			windowHandle()->setProperty(
+				"_q_waylandPopupAnchorRect",
 				QRect(
 					parentActionWidget->mapTo(
 						parentActionWidget->window(),
@@ -1064,7 +1077,8 @@ bool PopupMenu::prepareGeometryFor(
 		} else if (padding.top()) {
 			// provide the compositor with a range for flip_y so it uses
 			// the cursor point instead of the padding's top point
-			native->setParentControlGeometry(
+			windowHandle()->setProperty(
+				"_q_waylandPopupAnchorRect",
 				QRect(
 					p
 						- parentWidget()->window()->pos()
@@ -1074,11 +1088,8 @@ bool PopupMenu::prepareGeometryFor(
 				"_q_waylandPopupAnchor",
 				QVariant::fromValue(Qt::TopEdge | Qt::LeftEdge));
 		}
-		native->setExtendedWindowType(_parent
-			? QWaylandWindow::SubMenu
-			: QWaylandWindow::Menu);
 	}
-#endif // Qt >= 6.11.0 && wayland
+#endif // Qt >= 6.6.0 && wayland
 	const auto parentWidth = _parent ? _parent->inner().width() : 0;
 	if (style::RightToLeft()) {
 		const auto badLeft = !r.isNull() && w.x() - width() < r.x() - _margins.left();
